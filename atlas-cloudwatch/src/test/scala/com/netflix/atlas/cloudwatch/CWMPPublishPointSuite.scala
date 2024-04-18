@@ -66,7 +66,7 @@ class CWMPPublishPointSuite extends BaseCloudWatchMetricsProcessorSuite {
     val cache = ce(
       List(cwv(-5.minutes, -4.minutes, false))
     )
-    val category = MetricCategory("AWS/DynamoDB", 60, 4, List("MyTag"), List.empty, null)
+    val category = MetricCategory("ut", "AWS/DynamoDB", 60, 4, List("MyTag"), List.empty, null)
     assertPublishPoint(processor.getPublishPoint(cache, nts, category), 0, cache, true)
     assertMetrics(
       grace = 4.minutes.toMillis,
@@ -435,6 +435,7 @@ class CWMPPublishPointSuite extends BaseCloudWatchMetricsProcessorSuite {
       List(cwv(-2.minutes, -1.minutes, false))
     )
     val mono = MetricCategory(
+      "ut",
       "AWS/DynamoDB",
       60,
       -1,
@@ -453,6 +454,7 @@ class CWMPPublishPointSuite extends BaseCloudWatchMetricsProcessorSuite {
       List(cwv(-3.minutes, -2.minutes, false), cwv(-2.minutes, -1.minutes, false))
     )
     val mono = MetricCategory(
+      "ut",
       "AWS/DynamoDB",
       60,
       -1,
@@ -473,6 +475,7 @@ class CWMPPublishPointSuite extends BaseCloudWatchMetricsProcessorSuite {
       List(cwv(-7.minutes, -6.minutes, false), cwv(-2.minutes, -1.minutes, false))
     )
     val mono = MetricCategory(
+      "ut",
       "AWS/DynamoDB",
       60,
       -1,

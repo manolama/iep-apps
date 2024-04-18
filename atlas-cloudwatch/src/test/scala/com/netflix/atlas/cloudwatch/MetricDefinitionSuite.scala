@@ -27,7 +27,7 @@ import java.time.Instant
 class MetricDefinitionSuite extends FunSuite {
 
   private val meta = MetricMetadata(
-    MetricCategory("AWS/ELB", 60, -1, Nil, Nil, Some(Query.True)),
+    MetricCategory("ut", "AWS/ELB", 60, -1, Nil, Nil, Some(Query.True)),
     null,
     Nil
   )
@@ -35,7 +35,7 @@ class MetricDefinitionSuite extends FunSuite {
   test("bad config") {
     val cfg = ConfigFactory.empty()
     intercept[ConfigException] {
-      MetricCategory.fromConfig(cfg)
+      MetricCategory.fromConfig(cfg, "name")
     }
   }
 
@@ -248,7 +248,7 @@ class MetricDefinitionSuite extends FunSuite {
       .build()
 
     val metadata = MetricMetadata(
-      MetricCategory("AWS/RDS", 60, -1, Nil, Nil, Some(Query.True)),
+      MetricCategory("ut", "AWS/RDS", 60, -1, Nil, Nil, Some(Query.True)),
       definition,
       Nil
     )

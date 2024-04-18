@@ -29,6 +29,7 @@ class MetricDataSuite extends FunSuite {
 
   private val category =
     MetricCategory(
+      "ut",
       "namespace",
       60,
       -1,

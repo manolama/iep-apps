@@ -256,6 +256,11 @@ class RedisClusterCloudWatchMetricsProcessor(
             scrapeTime.record(elapsed, TimeUnit.NANOSECONDS)
 
             val duration = java.time.Duration.ofNanos(elapsed)
+            try {
+              computeNext(scrapeTimestamp)
+            } catch {
+              case ex: Exception => logger.error("Failed to mark scrape as finished", ex)
+            }
             logger.info(s"Finished a scrape run $duration with ${pubCounter.get()} pubs")
             promise.complete(Try(NotUsed))
           } else {

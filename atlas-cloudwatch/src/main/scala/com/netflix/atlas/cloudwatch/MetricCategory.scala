@@ -66,13 +66,15 @@ import scala.concurrent.duration.DurationInt
   *     offset of 8 hours to make sure it is ready.
   */
 case class MetricCategory(
+  name: String,
   namespace: String,
   period: Int,
   graceOverride: Int,
   dimensions: List[String],
   metrics: List[MetricDefinition],
   filter: Option[Query],
-  pollOffset: Option[Duration] = None
+  pollOffset: Option[Duration] = None,
+  sync: Option[List[String]] = None
 ) {
 
   /**
@@ -139,7 +141,7 @@ object MetricCategory extends StrictLogging {
     }
   }
 
-  def fromConfig(config: Config): MetricCategory = {
+  def fromConfig(config: Config, name: String): MetricCategory = {
     import scala.jdk.CollectionConverters.*
     val metrics = config.getConfigList("metrics").asScala.toList
     val filter =
@@ -156,15 +158,18 @@ object MetricCategory extends StrictLogging {
       if (config.hasPath("grace-override")) config.getInt("grace-override") else -1
     val pollOffset =
       if (config.hasPath("poll-offset")) Some(config.getDuration("poll-offset")) else None
+    val sync = if (config.hasPath("sync")) Some(config.getStringList("sync").asScala.toList) else None
 
     apply(
+      name,
       namespace = config.getString("namespace"),
       period = period,
       graceOverride = graceOverride,
       dimensions = config.getStringList("dimensions").asScala.toList,
       metrics = metrics.flatMap(MetricDefinition.fromConfig),
       filter = filter,
-      pollOffset = pollOffset
+      pollOffset = pollOffset,
+      sync = sync
     )
   }
 }

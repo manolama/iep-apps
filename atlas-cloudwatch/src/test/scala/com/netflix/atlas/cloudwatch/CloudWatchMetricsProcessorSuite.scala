@@ -171,6 +171,68 @@ class CloudWatchMetricsProcessorSuite extends BaseCloudWatchMetricsProcessorSuit
     assertEquals(merge(b, a), expected)
   }
 
+//  test("t") {
+//    val t = Track(category, 3)
+//    val tr = new t.Tr
+//    t.sets.put(1L, tr)
+//
+//    var ctrs = new Ctrs
+//    ctrs.published.set(5)
+//    ctrs.ready.set(0)
+//    tr.timeCounts.put(ts(-4.minutes), ctrs)
+//
+//    ctrs = new Ctrs
+//    ctrs.published.set(4)
+//    ctrs.ready.set(1)
+//    tr.timeCounts.put(ts(-3.minutes), ctrs)
+//
+//    ctrs = new Ctrs
+//    ctrs.published.set(0)
+//    ctrs.ready.set(1)
+//    ctrs.missing.set(4)
+//    tr.timeCounts.put(ts(-2.minutes), ctrs)
+//
+////    ctrs = new Ctrs
+////    ctrs.published.set(0)
+////    ctrs.ready.set(1)
+////    ctrs.missing.set(4)
+////    tr.timeCounts.put(ts(-1.minutes), ctrs)
+//
+//    tr.computeNext(nts)
+//    System.out.println(s"Picked: ${tr.fmtTs}")
+//  }
+//
+//  test("t2") {
+//    val t = Track(category, 3)
+//    val tr = new t.Tr
+//    t.sets.put(1L, tr)
+//
+//    var ctrs = new Ctrs
+//    ctrs.published.set(5)
+//    ctrs.ready.set(0)
+//    tr.timeCounts.put(ts(-4.minutes), ctrs)
+//
+//    ctrs = new Ctrs
+//    ctrs.published.set(4)
+//    ctrs.ready.set(0)
+//    ctrs.missing.set(1)
+//    tr.timeCounts.put(ts(-3.minutes), ctrs)
+//
+//    ctrs = new Ctrs
+//    ctrs.published.set(0)
+//    ctrs.ready.set(5)
+//    tr.timeCounts.put(ts(-2.minutes), ctrs)
+//
+//    ctrs = new Ctrs
+//    ctrs.published.set(0)
+//    ctrs.ready.set(1)
+//    ctrs.missing.set(4)
+//    tr.timeCounts.put(ts(-1.minutes), ctrs)
+//
+//    tr.computeNext(nts)
+//    System.out.println(s"Picked: ${tr.fmtTs}")
+//  }
+
   //  test("print metrics") {
   //    rules.rules.foreachEntry { (outerKey, nested) =>
   //      nested.foreachEntry { (innerKey, catTuple) =>

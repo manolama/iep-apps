@@ -15,6 +15,7 @@
  */
 package com.netflix.atlas.cloudwatch
 
+import com.netflix.atlas.cloudwatch.CloudWatchMetricsProcessor.hashers
 import org.apache.pekko.NotUsed
 import org.apache.pekko.actor.ActorSystem
 import com.netflix.atlas.cloudwatch.CloudWatchMetricsProcessor.newValue
@@ -24,6 +25,7 @@ import com.netflix.atlas.cloudwatch.CloudWatchMetricsProcessor.toAWSDimensions
 import com.netflix.atlas.cloudwatch.CloudWatchMetricsProcessor.toTagMap
 import com.netflix.atlas.core.util.SmallHashMap
 import com.netflix.spectator.api.Registry
+import com.netflix.spectator.impl.Hash64
 import com.typesafe.config.Config
 import com.typesafe.scalalogging.StrictLogging
 import software.amazon.awssdk.services.cloudwatch.model.Datapoint
@@ -31,8 +33,13 @@ import software.amazon.awssdk.services.cloudwatch.model.Dimension
 import software.amazon.awssdk.services.cloudwatch.model.Metric
 
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.Future
 import scala.jdk.CollectionConverters.*
 import scala.concurrent.duration.FiniteDuration
@@ -133,6 +140,8 @@ abstract class CloudWatchMetricsProcessor(
 
   /** How long to wait from the top of the publishPeriod before scraping. */
   private val publishDelay = config.getDuration("atlas.cloudwatch.publishOffset").getSeconds.toInt
+
+  private val tracking = new ConcurrentHashMap[MetricCategory, Track]()
 
   // ctor
   {
@@ -546,6 +555,19 @@ abstract class CloudWatchMetricsProcessor(
     }
   }
 
+  def tsHash(cache: CloudWatchCacheEntry, category: MetricCategory): Long = {
+    val hasher = hashers.get()
+    hasher.reset()
+    category.sync.map { d =>
+      d.foreach { s =>
+        cache.getDimensionsList.asScala
+          .filter(_.getName.equals(s))
+          .map(x => hasher.updateString(x.getValue))
+      }
+    }
+    hasher.compute()
+  }
+
   /**
     * Determines the most appropriate value to publish based on the previously published offset,
     * the latest updates, etc.
@@ -572,11 +594,22 @@ abstract class CloudWatchMetricsProcessor(
     var entry: CloudWatchValue = null
     var delta = 0L
     val needTwoValues = category.hasMonotonic
+    val hash = tsHash(updated, category)
+    val tracker = tracking.computeIfAbsent(category, _ => Track(category, gracePeriod, registry))
+    val prevTs = tracker.lastTS(hash)
+    var trackIdx = -1
 
     // find the oldest non-published value. May pick a published value for periods over 1m.
     while (!break && idx >= 0) {
       entry = cache.getData(idx)
       delta = scrapeTimestamp - entry.getUpdateTimestamp
+      if (normalize(entry.getTimestamp, category.period) == prevTs) {
+        if (trackIdx >= 0) {
+          logger.error("Multiple tracking index matches!!!")
+        } else {
+          trackIdx = idx
+        }
+      }
       if (!entry.getPublished) {
         if (delta > graceCutoff) {
           if (delta <= (graceCutoff + stp) && !needTwoValues) {
@@ -793,6 +826,45 @@ abstract class CloudWatchMetricsProcessor(
         }
       }
     }
+
+    try {
+
+      if (idx < 0) {
+        if (trackIdx <= 0) {
+          registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "missing").increment()
+        } else {
+          entry = updated.getData(trackIdx)
+          if (prevTs > 0) {
+            val local = normalize(entry.getTimestamp, category.period)
+            if (prevTs == local) {
+              registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "match").increment()
+            } else if (local < prevTs) {
+              registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "before").increment()
+            } else {
+              registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "after").increment()
+            }
+          }
+        }
+      } else {
+        entry = updated.getData(idx)
+        if (prevTs > 0) {
+          val local = normalize(entry.getTimestamp, category.period)
+          if (prevTs == local) {
+            registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "match").increment()
+          } else if (local < prevTs) {
+            registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "before").increment()
+          } else {
+            registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "after").increment()
+          }
+        }
+        val t = if (idx < 0) 0 else if (entry.getPublished) 2 else 1
+        tracker.update(hash, entry.getTimestamp, t)
+      }
+    } catch {
+      case ex: Exception =>
+        logger.error("Unexpected exception updating tracking", ex)
+    }
+
     (idx, updated)
   }
 
@@ -819,9 +891,15 @@ abstract class CloudWatchMetricsProcessor(
     val intervals = minCacheEntries
     interval * intervals
   }
+
+  def computeNext(scrapeTimestamp: Long): Unit = {
+    tracking.forEach((_, v) => v.computeNext(scrapeTimestamp))
+  }
 }
 
 object CloudWatchMetricsProcessor {
+
+  val hashers = ThreadLocal.withInitial(() => new Hash64())
 
   /**
     * Snaps the timestamp to the top of the period.
@@ -1054,6 +1132,120 @@ object CloudWatchMetricsProcessor {
         .append("aws.namespace" -> metric.namespace().replaceAll("/", "_"))
         .iterator
     )
+  }
+
+}
+
+
+class Ctrs {
+  val published = new AtomicInteger()
+  val ready = new AtomicInteger()
+  val missing = new AtomicInteger()
+}
+
+case class Track(category: MetricCategory, gracePeriod: Int, registry: Registry) {
+
+  val sets = new ConcurrentHashMap[Long, Tr]()
+  val pw = .35
+  val rw = .55
+  val mw = .15
+
+  val stp = category.period * 1000
+  val cutoff = stp + (stp / 2)
+  val graceCutoff =
+    stp * (if (category.graceOverride >= 0) category.graceOverride else gracePeriod)
+
+  val fmt = DateTimeFormatter.ofPattern("mm:ss")
+
+  def update(hash: Long, ts: Long, t: Int): Unit = {
+    val tr = sets.computeIfAbsent(hash, _ => new Tr())
+    val ctrs = tr.timeCounts.computeIfAbsent(ts, _ => new Ctrs())
+    t match {
+      case 0 => ctrs.missing.incrementAndGet()
+      case 1 => ctrs.ready.incrementAndGet()
+      case 2 => ctrs.published.incrementAndGet()
+    }
+    ctrs.published.incrementAndGet()
+  }
+
+  def lastTS(hash: Long): Long = {
+    val tr = sets.get(hash)
+    if (tr == null) 0 else tr.nextTS
+  }
+
+  def computeNext(scrapeTimestamp: Long): Unit = {
+    sets.forEach((hash, tr) => tr.computeNext(scrapeTimestamp))
+  }
+
+  class Tr {
+    val timeCounts = new ConcurrentHashMap[Long, Ctrs]()
+    var nextTS: Long = 0
+    var previousScore: Double = 0
+
+    def computeNext(scrapeTimestamp: Long): Unit = {
+      val sorted = new util.TreeMap[Long, Ctrs](timeCounts)
+      var bestTs = 0L
+      var total = .0
+      var lastScore = .0
+      val co = scrapeTimestamp - cutoff
+      val gc = scrapeTimestamp - graceCutoff
+
+      sorted.forEach((ts, ctrs) => {
+        val nts = normalize(ts, category.period)
+        if (nts < gc) {
+          timeCounts.remove(ts)
+        } else {
+          total += (pw * ctrs.published.get()) + (rw * ctrs.ready.get()) + (mw * ctrs.missing.get())
+        }
+      })
+
+      sorted.forEach((ts, ctrs) => {
+        if (total != 0) {
+          var score = (pw * ctrs.published.get()) / total
+          score += (rw * ctrs.ready.get()) / total
+          score += (mw * ctrs.missing.get()) / total
+
+          val dt = LocalDateTime.ofInstant(Instant.ofEpochMilli(ts), ZoneId.of("UTC"))
+          System.out.println(s"Score: ${score} @ ${dt.format(fmt)}")
+          if (score > lastScore) {
+            bestTs = ts
+            lastScore = score
+          }
+        }
+      })
+
+      if (nextTS == 0) {
+        nextTS = normalize(bestTs, category.period) + (category.period * 1000)
+      } else {
+        val computed = normalize(bestTs, category.period) + (category.period * 1000)
+        val expected = nextTS + (category.period * 1000)
+        if (computed != expected) {
+          registry.distributionSummary("atlas.cloudwatch.publish.TRACKING.nextTS.offset", "aws.namespace", category.namespace, "category", category.name).record(Math.abs(computed - expected))
+        } else {
+          registry.counter("atlas.cloudwatch.publish.TRACKING.nextTS.matched", "aws.namespace", category.namespace, "category", category.name).increment()
+        }
+        if (computed > expected + (stp)) {
+          nextTS = computed
+          registry.counter("atlas.cloudwatch.publish.TRACKING.nextTS.skip", "aws.namespace", category.namespace, "category", category.name).increment()
+        } else {
+          nextTS = expected
+        }
+
+        val c = timeCounts.get(nextTS)
+        if (c != null) {
+          registry.counter("atlas.cloudwatch.publish.TRACKING.nextTS.selected", "aws.namespace", category.namespace, "category", category.name, "state", "published").increment(c.published.get())
+          registry.counter("atlas.cloudwatch.publish.TRACKING.nextTS.selected", "aws.namespace", category.namespace, "category", category.name, "state", "ready").increment(c.ready.get())
+          registry.counter("atlas.cloudwatch.publish.TRACKING.nextTS.selected", "aws.namespace", category.namespace, "category", category.name, "state", "missing").increment(c.missing.get())
+        }
+      }
+      previousScore = lastScore
+      timeCounts.clear()
+    }
+
+    def fmtTs: String = {
+      val dt = LocalDateTime.ofInstant(Instant.ofEpochMilli(nextTS), ZoneId.of("UTC"))
+      dt.format(fmt)
+    }
   }
 
 }

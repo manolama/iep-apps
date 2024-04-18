@@ -49,7 +49,7 @@ class CloudWatchRules(config: Config) {
     import scala.jdk.CollectionConverters.*
     val categories = config.getStringList("atlas.cloudwatch.categories").asScala.map { name =>
       val cfg = config.getConfig(s"atlas.cloudwatch.$name")
-      MetricCategory.fromConfig(cfg)
+      MetricCategory.fromConfig(cfg, name)
     }
     categories.toList
   }
