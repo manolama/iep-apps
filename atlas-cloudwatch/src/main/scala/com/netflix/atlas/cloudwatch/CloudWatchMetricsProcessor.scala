@@ -599,17 +599,29 @@ abstract class CloudWatchMetricsProcessor(
     val prevTs = tracker.lastTS(hash)
     var trackIdx = -1
 
+    try {
+      var tid = cache.getDataCount - 1
+      while (!break && tid >= 0) {
+        entry = cache.getData(tid)
+        if (normalize(entry.getTimestamp, category.period) == prevTs) {
+          if (trackIdx >= 0) {
+            logger.error("Multiple tracking index matches!!!")
+          } else {
+            trackIdx = tid
+          }
+          break = true
+        }
+        tid -= 1
+      }
+    } catch {
+      case ex: Exception =>
+        logger.error("Unexpected exception in tracking", ex)
+    }
+
     // find the oldest non-published value. May pick a published value for periods over 1m.
     while (!break && idx >= 0) {
       entry = cache.getData(idx)
       delta = scrapeTimestamp - entry.getUpdateTimestamp
-      if (normalize(entry.getTimestamp, category.period) == prevTs) {
-        if (trackIdx >= 0) {
-          logger.error("Multiple tracking index matches!!!")
-        } else {
-          trackIdx = idx
-        }
-      }
       if (!entry.getPublished) {
         if (delta > graceCutoff) {
           if (delta <= (graceCutoff + stp) && !needTwoValues) {
@@ -829,24 +841,26 @@ abstract class CloudWatchMetricsProcessor(
 
     try {
 
-      if (idx < 0) {
-        if (trackIdx <= 0) {
-          registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "missing").increment()
-        } else {
-          entry = updated.getData(trackIdx)
-          if (prevTs > 0) {
-            val local = normalize(entry.getTimestamp, category.period)
-            if (prevTs == local) {
-              registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "match").increment()
-            } else if (local < prevTs) {
-              registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "before").increment()
-            } else {
-              registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "after").increment()
-            }
+      if (trackIdx < 0) {
+        registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "missing").increment()
+      } else {
+        entry = cache.getData(trackIdx)
+        if (prevTs > 0) {
+          val local = normalize(entry.getTimestamp, category.period)
+          if (prevTs == local) {
+            registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "match").increment()
+          } else if (local < prevTs) {
+            registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "before").increment()
+          } else {
+            registry.counter("atlas.cloudwatch.publish.TRACKING", "aws.namespace", category.namespace, "aws.metric", cache.getMetric, "state", "after").increment()
           }
         }
+      }
+
+      if (idx < 0) {
+
       } else {
-        entry = updated.getData(idx)
+        entry = cache.getData(idx)
         if (prevTs > 0) {
           val local = normalize(entry.getTimestamp, category.period)
           if (prevTs == local) {
